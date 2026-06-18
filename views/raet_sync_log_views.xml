@@ -1,0 +1,59 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <record id="view_raet_sync_log_list" model="ir.ui.view">
+        <field name="name">raet.sync.log.list</field>
+        <field name="model">raet.sync.log</field>
+        <field name="arch" type="xml">
+            <list string="Sincronizaciones RAET" decoration-danger="state == 'error'"
+                  decoration-success="state == 'done'" decoration-muted="state == 'running'">
+                <field name="create_date"/>
+                <field name="company_id"/>
+                <field name="tenant"/>
+                <field name="updated_from"/>
+                <field name="total_count"/>
+                <field name="created_count"/>
+                <field name="updated_count"/>
+                <field name="error_count"/>
+                <field name="state" widget="badge"
+                       decoration-success="state == 'done'"
+                       decoration-danger="state == 'error'"/>
+            </list>
+        </field>
+    </record>
+
+    <record id="view_raet_sync_log_form" model="ir.ui.view">
+        <field name="name">raet.sync.log.form</field>
+        <field name="model">raet.sync.log</field>
+        <field name="arch" type="xml">
+            <form string="Sincronización RAET">
+                <sheet>
+                    <group>
+                        <group>
+                            <field name="company_id"/>
+                            <field name="tenant"/>
+                            <field name="updated_from"/>
+                            <field name="state"/>
+                        </group>
+                        <group>
+                            <field name="date_start"/>
+                            <field name="date_end"/>
+                            <field name="total_count"/>
+                            <field name="created_count"/>
+                            <field name="updated_count"/>
+                            <field name="error_count"/>
+                        </group>
+                    </group>
+                    <group string="Detalle">
+                        <field name="message" nolabel="1"/>
+                    </group>
+                </sheet>
+            </form>
+        </field>
+    </record>
+
+    <record id="action_raet_sync_log" model="ir.actions.act_window">
+        <field name="name">Sincronizaciones RAET</field>
+        <field name="res_model">raet.sync.log</field>
+        <field name="view_mode">list,form</field>
+    </record>
+</odoo>

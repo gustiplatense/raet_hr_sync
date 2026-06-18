@@ -1,0 +1,56 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <record id="res_config_settings_view_form_raet" model="ir.ui.view">
+        <field name="name">res.config.settings.view.form.raet</field>
+        <field name="model">res.config.settings</field>
+        <field name="inherit_id" ref="base.res_config_settings_view_form"/>
+        <field name="arch" type="xml">
+            <xpath expr="//form" position="inside">
+                <app string="RAET HR" name="raet_hr_sync" logo="/raet_hr_sync/static/description/icon.png">
+                    <block title="Credenciales de la API RAET / Visma Latam" name="raet_creds_block">
+                        <setting string="Usuario API" help="Usuario de la API de RAET (grant_type=password).">
+                            <field name="raet_username"/>
+                        </setting>
+                        <setting string="Contraseña API" help="Contraseña de la API de RAET.">
+                            <field name="raet_password" password="True"/>
+                        </setting>
+                        <setting string="Grant type">
+                            <field name="raet_grant_type"/>
+                        </setting>
+                    </block>
+                    <block title="Endpoints" name="raet_endpoints_block">
+                        <setting string="URL de Login" help="Endpoint de autenticación.">
+                            <field name="raet_login_url"/>
+                        </setting>
+                        <setting string="URL Admin" help="Base de la API de administración (tenants).">
+                            <field name="raet_admin_url"/>
+                        </setting>
+                        <setting string="URL API" help="Base de la API de datos (empleados).">
+                            <field name="raet_api_url"/>
+                        </setting>
+                    </block>
+                    <block title="Parámetros de sincronización" name="raet_sync_block">
+                        <setting string="Tamaño de página" help="Empleados por página al consultar la API.">
+                            <field name="raet_page_size"/>
+                        </setting>
+                        <setting string="Días por defecto (updatedFrom)" help="Ventana de novedades usada por el cron.">
+                            <field name="raet_default_days"/>
+                        </setting>
+                        <setting string="Probar conexión" help="Verifica el login contra RAET.">
+                            <button name="action_raet_test_connection" type="object"
+                                    string="Probar conexión RAET" class="btn-secondary"/>
+                        </setting>
+                    </block>
+                </app>
+            </xpath>
+        </field>
+    </record>
+
+    <record id="action_raet_config_settings" model="ir.actions.act_window">
+        <field name="name">Integración RAET</field>
+        <field name="res_model">res.config.settings</field>
+        <field name="view_mode">form</field>
+        <field name="target">inline</field>
+        <field name="context">{'module': 'raet_hr_sync'}</field>
+    </record>
+</odoo>

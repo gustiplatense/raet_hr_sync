@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <!-- Menú principal RAET dentro de Empleados > Configuración -->
+    <menuitem id="menu_raet_root"
+              name="RAET"
+              parent="hr.menu_human_resources_configuration"
+              sequence="90"/>
+
+    <menuitem id="menu_raet_sync_wizard"
+              name="Sincronizar empleados"
+              parent="menu_raet_root"
+              action="action_raet_sync_wizard"
+              sequence="10"
+              groups="hr.group_hr_manager"/>
+
+    <menuitem id="menu_raet_sync_log"
+              name="Historial de sincronización"
+              parent="menu_raet_root"
+              action="action_raet_sync_log"
+              sequence="20"
+              groups="hr.group_hr_user"/>
+
+    <menuitem id="menu_raet_settings"
+              name="Configuración RAET"
+              parent="menu_raet_root"
+              action="action_raet_config_settings"
+              sequence="30"
+              groups="base.group_system"/>
+</odoo>

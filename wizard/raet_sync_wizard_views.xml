@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <record id="view_raet_sync_wizard_form" model="ir.ui.view">
+        <field name="name">raet.sync.wizard.form</field>
+        <field name="model">raet.sync.wizard</field>
+        <field name="arch" type="xml">
+            <form string="Sincronizar empleados desde RAET">
+                <group>
+                    <field name="mode" widget="radio"/>
+                    <field name="updated_from" invisible="mode == 'full'"
+                           required="mode == 'incremental'"/>
+                    <field name="company_ids" widget="many2many_tags"
+                           options="{'no_create': True}"/>
+                </group>
+                <p class="text-muted">
+                    Si no seleccionás empresas, se procesarán todas las que tengan
+                    Tenant RAET configurado y la sincronización habilitada.
+                </p>
+                <footer>
+                    <button name="action_sync" type="object" string="Sincronizar ahora"
+                            class="btn-primary"/>
+                    <button string="Cancelar" class="btn-secondary" special="cancel"/>
+                </footer>
+            </form>
+        </field>
+    </record>
+
+    <record id="action_raet_sync_wizard" model="ir.actions.act_window">
+        <field name="name">Sincronizar empleados (RAET)</field>
+        <field name="res_model">raet.sync.wizard</field>
+        <field name="view_mode">form</field>
+        <field name="target">new</field>
+    </record>
+</odoo>

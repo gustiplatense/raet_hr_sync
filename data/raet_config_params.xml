@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo noupdate="1">
+    <!-- Valores por defecto de los endpoints de RAET / Visma Latam.
+         Se pueden cambiar luego en Ajustes > Empleados > Integración RAET. -->
+    <record id="raet_param_login_url" model="ir.config_parameter">
+        <field name="key">raet_hr_sync.login_url</field>
+        <field name="value">https://webapiadmin.vismalatam.com/authentication/login</field>
+    </record>
+    <record id="raet_param_admin_url" model="ir.config_parameter">
+        <field name="key">raet_hr_sync.admin_url</field>
+        <field name="value">https://webapiadmin.vismalatam.com</field>
+    </record>
+    <record id="raet_param_api_url" model="ir.config_parameter">
+        <field name="key">raet_hr_sync.api_url</field>
+        <field name="value">https://webapi.vismalatam.com</field>
+    </record>
+    <record id="raet_param_grant_type" model="ir.config_parameter">
+        <field name="key">raet_hr_sync.grant_type</field>
+        <field name="value">password</field>
+    </record>
+    <record id="raet_param_page_size" model="ir.config_parameter">
+        <field name="key">raet_hr_sync.page_size</field>
+        <field name="value">500</field>
+    </record>
+    <record id="raet_param_default_days" model="ir.config_parameter">
+        <field name="key">raet_hr_sync.default_days</field>
+        <field name="value">60</field>
+    </record>
+</odoo>

@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <record id="view_employee_form_raet" model="ir.ui.view">
+        <field name="name">hr.employee.form.raet</field>
+        <field name="model">hr.employee</field>
+        <field name="inherit_id" ref="hr.view_employee_form"/>
+        <field name="arch" type="xml">
+            <xpath expr="//notebook" position="inside">
+                <page string="RAET" name="raet_page">
+                    <group>
+                        <group string="Identificación RAET" name="raet_ids">
+                            <field name="x_raet_external_id"/>
+                            <field name="x_raet_internal_id"/>
+                            <field name="x_raet_tenant"/>
+                            <field name="x_raet_last_sync" readonly="1"/>
+                        </group>
+                        <group string="Situación laboral (RAET)" name="raet_job">
+                            <field name="x_raet_hiring_date"/>
+                            <field name="x_raet_entry_date"/>
+                            <field name="x_raet_end_date"/>
+                            <field name="x_raet_low_motive"/>
+                            <field name="x_raet_reports_to_external"/>
+                            <field name="x_raet_organization_model"/>
+                        </group>
+                        <group string="Estructura organizativa (RAET)" name="raet_struct">
+                            <field name="x_raet_imput_center"/>
+                            <field name="x_raet_cost_center"/>
+                            <field name="x_raet_contract_type"/>
+                            <field name="x_raet_working_day"/>
+                            <field name="x_raet_position_code"/>
+                            <field name="x_raet_department_code"/>
+                        </group>
+                        <group string="Datos personales (RAET)" name="raet_personal">
+                            <field name="x_raet_nickname"/>
+                            <field name="x_raet_nationality_desc"/>
+                            <field name="x_raet_marital_desc"/>
+                            <field name="x_raet_study_level"/>
+                            <field name="x_raet_fiscal_number"/>
+                            <field name="x_raet_fiscal_type"/>
+                            <field name="x_raet_handicapped"/>
+                            <field name="x_raet_handicap_type"/>
+                            <field name="x_raet_address_reference"/>
+                            <field name="x_raet_image_url"/>
+                        </group>
+                    </group>
+                </page>
+            </xpath>
+        </field>
+    </record>
+</odoo>
