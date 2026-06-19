@@ -5,7 +5,9 @@
         <field name="model">raet.sync.log</field>
         <field name="arch" type="xml">
             <list string="Sincronizaciones RAET" decoration-danger="state == 'error'"
-                  decoration-success="state == 'done'" decoration-muted="state == 'running'">
+                  decoration-success="state == 'done'"
+                  decoration-info="state == 'queued'"
+                  decoration-muted="state == 'running'">
                 <field name="create_date"/>
                 <field name="company_id"/>
                 <field name="tenant"/>
@@ -16,6 +18,8 @@
                 <field name="error_count"/>
                 <field name="state" widget="badge"
                        decoration-success="state == 'done'"
+                       decoration-info="state == 'queued'"
+                       decoration-warning="state == 'running'"
                        decoration-danger="state == 'error'"/>
             </list>
         </field>

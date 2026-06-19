@@ -14,7 +14,8 @@ class RaetSyncLog(models.Model):
     date_end = fields.Datetime(string="Fin")
     updated_from = fields.Char(string="updatedFrom")
     state = fields.Selection(
-        [("running", "En curso"),
+        [("queued", "En cola"),
+         ("running", "En curso"),
          ("done", "Finalizado"),
          ("error", "Con errores")],
         string="Estado", default="running", index=True)

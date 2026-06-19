@@ -28,6 +28,7 @@ sólo levanta ``RaetApiError`` en caso de fallo, para que la capa de modelos
 decida cómo registrar el error.
 """
 import logging
+import time
 
 try:
     import requests
@@ -38,6 +39,9 @@ _logger = logging.getLogger(__name__)
 
 DEFAULT_PAGE_SIZE = 500
 DEFAULT_TIMEOUT = 60
+# Tope de seguridad para evitar bucles infinitos de paginación si la API
+# ignora el parámetro 'page' y devuelve siempre páginas llenas.
+MAX_PAGES = 1000
 
 
 class RaetApiError(Exception):
@@ -77,11 +81,18 @@ class RaetClient(object):
             "grant_type": self.grant_type,
         }
         headers = {"Content-Type": "application/x-www-form-urlencoded"}
+        _logger.info("RAET: login en %s (usuario=%s)", self.login_url, self.username)
+        start = time.time()
         try:
             resp = requests.post(self.login_url, data=data, headers=headers,
                                  timeout=self.timeout)
         except Exception as exc:  # noqa: BLE001
+            _logger.error("RAET: fallo de conexión en login tras %.1fs: %s",
+                          time.time() - start, exc)
             raise RaetApiError("No se pudo conectar al login de RAET: %s" % exc)
+        elapsed = time.time() - start
+        _logger.info("RAET: login respondió HTTP %s en %.1fs",
+                     resp.status_code, elapsed)
         if resp.status_code != 200:
             raise RaetApiError(
                 "Login RAET falló (HTTP %s): %s" % (resp.status_code, resp.text[:500]))
@@ -112,13 +123,25 @@ class RaetClient(object):
     # GET genérico con reintento de login si expira el token
     # ------------------------------------------------------------------ #
     def _get(self, url, tenant, params=None, _retry=True):
+        _logger.debug("RAET: GET %s params=%s tenant=%s", url, params or {}, tenant)
+        start = time.time()
         try:
             resp = requests.get(url, headers=self._headers(tenant),
                                 params=params or {}, timeout=self.timeout)
         except Exception as exc:  # noqa: BLE001
+            _logger.error("RAET: error de red en GET %s tras %.1fs: %s",
+                          url, time.time() - start, exc)
             raise RaetApiError("Error de red en GET %s: %s" % (url, exc))
+        elapsed = time.time() - start
+        if elapsed > 5:
+            _logger.warning("RAET: GET %s tardó %.1fs (HTTP %s)",
+                            url, elapsed, resp.status_code)
+        else:
+            _logger.debug("RAET: GET %s -> HTTP %s en %.2fs",
+                          url, resp.status_code, elapsed)
         if resp.status_code == 401 and _retry:
             # token vencido -> reloguear una vez
+            _logger.info("RAET: token vencido en %s, re-autenticando", url)
             self._token = None
             return self._get(url, tenant, params=params, _retry=False)
         if resp.status_code == 404:
@@ -150,21 +173,44 @@ class RaetClient(object):
         """
         url = "%s/employees" % self.api_url
         page = 1
-        while True:
+        emitted = 0
+        _logger.info("RAET: listando empleados tenant=%s updatedFrom=%s pageSize=%s",
+                     tenant, updated_from or "(todo)", self.page_size)
+        while page <= MAX_PAGES:
             params = {"pageSize": self.page_size, "page": page}
             if updated_from:
                 params["updatedFrom"] = updated_from
-            data = self._get(url, tenant, params=params) or {}
-            values = data.get("values") or []
-            for emp in values:
-                yield emp
-            total = data.get("totalCount") or 0
-            # Igual criterio que el VB original: si la página vino "llena",
-            # pedir la siguiente.
-            if len(values) >= self.page_size and total >= self.page_size:
-                page += 1
+            data = self._get(url, tenant, params=params)
+            # La API suele devolver {"values": [...], "totalCount": N}, pero
+            # se contempla también una lista directa por robustez.
+            if isinstance(data, list):
+                values = data
+                total = len(data)
             else:
+                data = data or {}
+                values = data.get("values") or []
+                total = data.get("totalCount") or 0
+            _logger.info("RAET: página %s -> %s registros (totalCount=%s, acumulado=%s)",
+                         page, len(values), total, emitted + len(values))
+            if page == 1 and not values:
+                _logger.warning(
+                    "RAET: la primera página no trajo empleados. Respuesta=%.500s",
+                    data)
+            for emp in values:
+                emitted += 1
+                yield emp
+            # Condiciones de parada: página no llena, o ya emitimos el total.
+            if len(values) < self.page_size:
                 break
+            if total and emitted >= total:
+                break
+            page += 1
+        else:
+            _logger.warning(
+                "RAET: se alcanzó el tope de %s páginas para tenant=%s; "
+                "se detiene la paginación por seguridad.", MAX_PAGES, tenant)
+        _logger.info("RAET: fin del listado tenant=%s, %s empleados emitidos",
+                     tenant, emitted)
 
     def get_employee(self, tenant, raet_id):
         """Detalle completo del empleado (GET /employees/rh-{id})."""

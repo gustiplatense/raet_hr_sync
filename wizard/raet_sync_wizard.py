@@ -1,8 +1,11 @@
 # -*- coding: utf-8 -*-
+import logging
 from datetime import timedelta
 
 from odoo import _, api, fields, models
 from odoo.exceptions import UserError
+
+_logger = logging.getLogger(__name__)
 
 
 class RaetSyncWizard(models.TransientModel):
@@ -48,15 +51,35 @@ class RaetSyncWizard(models.TransientModel):
         if not companies:
             raise UserError(_("No hay empresas con Tenant RAET configurado."))
 
-        client = Employee._raet_get_client()
-        logs = self.env["raet.sync.log"]
-        for company in companies:
-            logs |= Employee._raet_sync_company(
-                company, client=client, updated_from=updated_from)
+        # Validación temprana de credenciales: no hace login, sólo verifica que
+        # la configuración exista, para dar feedback inmediato en el asistente.
+        try:
+            Employee._raet_get_client()
+        except UserError:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            _logger.exception("RAET: no se pudo inicializar la conexión")
+            raise UserError(
+                _("No se pudo inicializar la conexión con RAET: %s") % exc)
+
+        # Encolar el trabajo: se procesa en segundo plano (worker de cron), de
+        # modo que la petición web responde al instante y la sincronización no
+        # se interrumpe por el límite de tiempo del worker HTTP.
+        logs = Employee._raet_enqueue_companies(companies, updated_from=updated_from)
+        _logger.info(
+            "RAET: %s sincronización(es) encolada(s) desde el asistente "
+            "(modo=%s, updatedFrom=%s, empresas=%s)",
+            len(logs), self.mode, updated_from or "(todo)",
+            companies.mapped("name"))
+
+        if not logs:
+            raise UserError(_(
+                "No se pudo encolar ninguna sincronización. Revisá el log del "
+                "servidor de Odoo para más detalle."))
 
         return {
             "type": "ir.actions.act_window",
-            "name": _("Resultado de sincronización RAET"),
+            "name": _("Sincronizaciones RAET (en cola)"),
             "res_model": "raet.sync.log",
             "view_mode": "list,form",
             "domain": [("id", "in", logs.ids)],

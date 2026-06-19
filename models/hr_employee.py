@@ -413,20 +413,40 @@ class HrEmployee(models.Model):
     # ===================================================================== #
     # Sincronización por empresa
     # ===================================================================== #
-    def _raet_sync_company(self, company, client=None, updated_from=None):
-        """Sincroniza el padrón de una empresa (tenant). Devuelve el log."""
+    def _raet_sync_company(self, company, client=None, updated_from=None, log=None):
+        """Sincroniza el padrón de una empresa (tenant). Devuelve el log.
+
+        Si se recibe ``log`` (p. ej. un trabajo encolado) se reutiliza y se pasa
+        a estado 'running'; si no, se crea uno nuevo. Así el mismo método sirve
+        tanto para la ejecución directa como para la cola asíncrona del cron.
+        """
         self = self.sudo()
         tenant = company.raet_tenant_id
         if not tenant:
             raise UserError(_(
                 "La empresa '%s' no tiene configurado el Tenant RAET.") % company.display_name)
         client = client or self._raet_get_client()
-        log = self.env["raet.sync.log"].create({
-            "company_id": company.id,
-            "tenant": tenant,
-            "updated_from": updated_from or "",
-            "state": "running",
-        })
+        if log:
+            log.write({
+                "tenant": tenant,
+                "updated_from": updated_from or "",
+                "state": "running",
+                "date_start": fields.Datetime.now(),
+            })
+        else:
+            log = self.env["raet.sync.log"].create({
+                "company_id": company.id,
+                "tenant": tenant,
+                "updated_from": updated_from or "",
+                "state": "running",
+            })
+        # Deja constancia inmediata de que la corrida empezó: si el worker HTTP
+        # muere por timeout, el log seguirá visible en estado 'running' en lugar
+        # de perderse en el rollback de la transacción.
+        self.env.cr.commit()
+        _logger.info(
+            "RAET: inicio sync empresa=%s tenant=%s updatedFrom=%s (log id=%s)",
+            company.name, tenant, updated_from or "(todo)", log.id)
         created = updated = errors = total = 0
         error_lines = []
         try:
@@ -457,19 +477,47 @@ class HrEmployee(models.Model):
                     error_lines.append("rh-%s: %s" % (raet_id, exc))
                     _logger.exception("RAET: error procesando empleado %s (tenant %s)",
                                       raet_id, tenant)
+                # Progreso periódico: persistir contadores parciales y dejar
+                # rastro en el log del servidor para padrones grandes.
+                if total % 25 == 0:
+                    _logger.info(
+                        "RAET: progreso tenant=%s -> procesados=%s creados=%s "
+                        "actualizados=%s errores=%s",
+                        tenant, total, created, updated, errors)
+                    log.write({
+                        "created_count": created, "updated_count": updated,
+                        "error_count": errors, "total_count": total,
+                    })
+                    self.env.cr.commit()
             # Resolver jefes directos una vez creados todos los empleados.
             self._raet_resolve_managers(company)
             company.sudo().write({"raet_last_sync": fields.Datetime.now()})
-        except RaetApiError as exc:
+        except Exception as exc:  # noqa: BLE001
+            # Cualquier fallo no controlado a nivel de la corrida (error de API,
+            # red, timeout parcial, paginación, resolución de jefes, etc.) queda
+            # registrado y visible en el log en lugar de dejar la corrida colgada
+            # en estado 'running'.
+            self.env.cr.rollback()
+            _logger.exception(
+                "RAET: sincronización abortada para empresa=%s tenant=%s",
+                company.name, tenant)
+            is_api = isinstance(exc, RaetApiError)
+            msg = (_("Error de API RAET: %s") if is_api
+                   else _("Sincronización interrumpida: %s")) % exc
+            if error_lines:
+                msg = "%s\n\n%s" % (msg, "\n".join(error_lines))
             log.write({
                 "state": "error",
                 "date_end": fields.Datetime.now(),
                 "created_count": created, "updated_count": updated,
                 "error_count": errors, "total_count": total,
-                "message": _("Error de API RAET: %s") % exc,
+                "message": msg,
             })
             self.env.cr.commit()
-            raise UserError(_("Error de API RAET: %s") % exc)
+            # No se relanza: el error queda registrado y visible en el log para
+            # que el usuario pueda diagnosticarlo, y la corrida no aborta el
+            # resto de empresas.
+            return log
 
         log.write({
             "state": "error" if errors else "done",
@@ -479,6 +527,10 @@ class HrEmployee(models.Model):
             "message": "\n".join(error_lines) or _("Sincronización completada."),
         })
         self.env.cr.commit()
+        _logger.info(
+            "RAET: fin sync empresa=%s tenant=%s -> procesados=%s creados=%s "
+            "actualizados=%s errores=%s", company.name, tenant, total, created,
+            updated, errors)
         return log
 
     def _raet_resolve_managers(self, company):
@@ -531,3 +583,97 @@ class HrEmployee(models.Model):
     def _cron_raet_sync(self):
         """Punto de entrada del cron programado."""
         return self._raet_sync_all(updated_from=None)
+
+    # ===================================================================== #
+    # Cola asíncrona (procesada por el worker de cron)
+    # ===================================================================== #
+    @api.model
+    def _raet_enqueue_companies(self, companies, updated_from=None):
+        """Crea un trabajo en cola (``raet.sync.log`` en estado 'queued') por
+        cada empresa y dispara el cron para procesarlos en segundo plano.
+
+        Se usa desde el asistente manual para que la petición web responda al
+        instante y el trabajo pesado corra en un worker de cron, sin el límite
+        de tiempo del worker HTTP. Devuelve los logs encolados.
+        """
+        Log = self.env["raet.sync.log"].sudo()
+        logs = Log.browse()
+        for company in companies:
+            logs |= Log.create({
+                "company_id": company.id,
+                "tenant": company.raet_tenant_id or "",
+                "updated_from": updated_from or "",
+                "state": "queued",
+            })
+        # Persistir la cola de inmediato para que el worker de cron (otra
+        # transacción) la vea aunque la petición actual tarde en cerrar.
+        self.env.cr.commit()
+        cron = self.env.ref(
+            "raet_hr_sync.ir_cron_raet_process_queue", raise_if_not_found=False)
+        if cron:
+            cron.sudo()._trigger()
+            _logger.info(
+                "RAET: encolados %s trabajo(s) de sincronización; cron disparado.",
+                len(logs))
+        else:
+            _logger.warning(
+                "RAET: no se encontró el cron de procesamiento de cola; los "
+                "trabajos quedarán 'en cola' hasta la próxima ejecución programada.")
+        return logs
+
+    @api.model
+    def _raet_process_queue(self, limit=None):
+        """Procesa los trabajos de sincronización en estado 'queued'.
+
+        Punto de trabajo del cron: toma cada log encolado y lo sincroniza
+        reutilizando el mismo registro. El cron de Odoo evita la ejecución
+        concurrente consigo mismo, por lo que no hay riesgo de procesar dos
+        veces el mismo trabajo.
+        """
+        Log = self.env["raet.sync.log"].sudo()
+        queued = Log.search([("state", "=", "queued")], order="id", limit=limit)
+        if not queued:
+            return False
+        _logger.info("RAET: procesando %s trabajo(s) en cola.", len(queued))
+        try:
+            client = self._raet_get_client()
+        except Exception as exc:  # noqa: BLE001
+            _logger.exception("RAET: no se pudo crear el cliente para la cola")
+            queued.write({
+                "state": "error",
+                "date_end": fields.Datetime.now(),
+                "message": _("No se pudo inicializar la conexión con RAET: %s") % exc,
+            })
+            self.env.cr.commit()
+            return False
+        for log in queued:
+            company = log.company_id
+            if not company:
+                log.write({
+                    "state": "error",
+                    "date_end": fields.Datetime.now(),
+                    "message": _("El trabajo en cola no tiene empresa asociada."),
+                })
+                self.env.cr.commit()
+                continue
+            try:
+                self._raet_sync_company(
+                    company, client=client,
+                    updated_from=log.updated_from or False, log=log)
+            except Exception as exc:  # noqa: BLE001
+                self.env.cr.rollback()
+                _logger.exception(
+                    "RAET: fallo procesando trabajo en cola id=%s empresa=%s",
+                    log.id, company.name)
+                log.write({
+                    "state": "error",
+                    "date_end": fields.Datetime.now(),
+                    "message": _("Error al procesar el trabajo en cola: %s") % exc,
+                })
+                self.env.cr.commit()
+        return True
+
+    @api.model
+    def _cron_raet_process_queue(self):
+        """Punto de entrada del cron que procesa la cola de sincronización."""
+        return self._raet_process_queue()
