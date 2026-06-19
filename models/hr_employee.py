@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+import json
 import logging
 from datetime import timedelta
 
@@ -47,6 +48,46 @@ def _raet_parse_date(value):
     except (ValueError, TypeError):
         return False
     return text
+
+
+def _raet_pick(source, *keys):
+    """Devuelve el primer valor no vacío entre varias claves de ``source``.
+
+    Permite leer un mismo dato venga en camelCase (formato documentado) o en
+    snake_case plano (formato real observado), p. ej.
+    ``_raet_pick(detail, "firstName", "name")``. Las claves anidadas se pueden
+    expresar con puntos: ``"genre.code"``.
+    """
+    if not isinstance(source, dict):
+        return ""
+    for key in keys:
+        value = source
+        for part in str(key).split("."):
+            if not isinstance(value, dict):
+                value = None
+                break
+            value = value.get(part)
+        if value is None:
+            continue
+        if isinstance(value, str):
+            value = value.strip()
+        if value not in ("", [], {}, None):
+            return value
+    return ""
+
+
+def _raet_to_bool(value, default=False):
+    """Normaliza un flag de RAET ('1'/'0'/'true'/'S'/bool) a booleano."""
+    if value in ("", None):
+        return default
+    if isinstance(value, bool):
+        return value
+    text = str(value).strip().lower()
+    if text in ("1", "true", "t", "s", "si", "sí", "yes", "y", "x"):
+        return True
+    if text in ("0", "false", "f", "n", "no"):
+        return False
+    return default
 
 
 class HrEmployee(models.Model):
@@ -220,15 +261,20 @@ class HrEmployee(models.Model):
         detail = detail or {}
         vals = {}
 
-        # --- Nombre ---
-        parts = [detail.get("firstName"), detail.get("middleName"),
-                 detail.get("lastName"), detail.get("familyName")]
-        name = " ".join(p.strip() for p in parts if p and p.strip())
-        vals["name"] = name or (detail.get("externalId") or "Empleado RAET")
+        # --- Nombre (camelCase documentado o snake_case plano) ---
+        parts = [
+            _raet_pick(detail, "firstName", "name"),
+            _raet_pick(detail, "middleName"),
+            _raet_pick(detail, "lastName", "first_last_name"),
+            _raet_pick(detail, "familyName", "second_last_name"),
+        ]
+        name = " ".join(str(p).strip() for p in parts if p and str(p).strip())
+        vals["name"] = name or (
+            _raet_pick(detail, "externalId", "id_code_internal") or "Empleado RAET")
 
         # --- Identificadores ---
-        external_id = detail.get("externalId")
-        internal_id = detail.get("id")
+        external_id = _raet_pick(detail, "externalId")
+        internal_id = _raet_pick(detail, "id", "id_code_internal")
         vals["x_raet_external_id"] = external_id and str(external_id) or False
         vals["x_raet_internal_id"] = internal_id and str(internal_id) or False
         vals["x_raet_tenant"] = str(tenant)
@@ -236,42 +282,54 @@ class HrEmployee(models.Model):
         self._raet_set_if_field(vals, "barcode",
                                 external_id and str(external_id) or False)
         vals["company_id"] = company.id
-        vals["active"] = bool(detail.get("isActive", True))
+        if "sw_active" in detail:
+            vals["active"] = _raet_to_bool(detail.get("sw_active"), default=True)
+        else:
+            vals["active"] = bool(detail.get("isActive", True))
 
         # --- Datos personales ---
-        self._raet_set_if_field(vals, "gender",
-                                self._raet_map_gender(detail.get("genre")))
-        self._raet_set_if_field(vals, "birthday",
-                                _raet_parse_date(detail.get("dateOfBirth")))
-        self._raet_set_if_field(vals, "place_of_birth", detail.get("placeOfBirth"))
+        self._raet_set_if_field(
+            vals, "gender",
+            self._raet_map_gender(_raet_pick(detail, "genre", "id_code_gender")))
+        self._raet_set_if_field(
+            vals, "birthday",
+            _raet_parse_date(_raet_pick(detail, "dateOfBirth", "birth_date")))
+        self._raet_set_if_field(vals, "place_of_birth",
+                                _raet_pick(detail, "placeOfBirth"))
         self._raet_set_if_field(
             vals, "country_of_birth",
-            self._raet_find_country(detail.get("countryOfBirth")))
-        vals["x_raet_nickname"] = detail.get("nickname") or False
-        vals["x_raet_organization_model"] = detail.get("organizationModel") or False
-        vals["x_raet_image_url"] = detail.get("imageUrl") or False
+            self._raet_find_country(_raet_pick(detail, "countryOfBirth")))
+        vals["x_raet_nickname"] = _raet_pick(detail, "nickname") or False
+        vals["x_raet_organization_model"] = \
+            _raet_pick(detail, "organizationModel") or False
+        vals["x_raet_image_url"] = \
+            _raet_pick(detail, "imageUrl", "url_img_user") or False
 
-        # Nacionalidad
+        # Nacionalidad: sub-lista camelCase o campo plano 'nationality'
         nationalities = detail.get("nationalities") or []
-        if nationalities:
-            nat_desc = nationalities[0].get("description")
+        nat_desc = (nationalities[0].get("description") if nationalities
+                    else _raet_pick(detail, "nationality"))
+        if nat_desc:
             vals["x_raet_nationality_desc"] = nat_desc or False
             self._raet_set_if_field(vals, "country_id",
                                     self._raet_find_country(nat_desc))
 
         # Estado civil
         marital = detail.get("maritalStatus") or {}
-        marital_desc = marital.get("description")
+        marital_desc = marital.get("description") if isinstance(marital, dict) else ""
+        marital_desc = marital_desc or _raet_pick(detail, "estado_civil")
         if marital_desc:
             vals["x_raet_marital_desc"] = marital_desc
             self._raet_set_if_field(vals, "marital",
                                     self._raet_map_marital(marital_desc))
 
-        # Documento de identidad
+        # Documento de identidad (DNI): sub-lista camelCase o campo plano
         nids = detail.get("nationalIdentificationNumbers") or []
-        if nids and nids[0].get("number"):
-            self._raet_set_if_field(vals, "identification_id",
-                                    str(nids[0].get("number")))
+        doc_number = (str(nids[0].get("number"))
+                      if (nids and nids[0].get("number"))
+                      else _raet_pick(detail, "identificacion"))
+        if doc_number:
+            self._raet_set_if_field(vals, "identification_id", str(doc_number))
 
         # Número fiscal / CUIT
         fiscals = detail.get("fiscalNumbers") or []
@@ -287,39 +345,62 @@ class HrEmployee(models.Model):
         study = detail.get("studyLevel") or {}
         vals["x_raet_study_level"] = study.get("description") or False
 
-        # Discapacidad
-        vals["x_raet_handicapped"] = bool(detail.get("handicapped"))
+        # Discapacidad: flag camelCase 'handicapped' o plano 'sw_disabled'
+        if "sw_disabled" in detail:
+            handicapped = _raet_to_bool(detail.get("sw_disabled"))
+        else:
+            handicapped = bool(detail.get("handicapped"))
+        vals["x_raet_handicapped"] = handicapped
         htype = detail.get("handicapType") or {}
         vals["x_raet_handicap_type"] = htype.get("description") or False
-        self._raet_set_if_field(vals, "disabled",
-                                bool(detail.get("handicapped")))
+        self._raet_set_if_field(vals, "disabled", handicapped)
 
         # Email
-        email = detail.get("email")
+        email = _raet_pick(detail, "email")
         self._raet_set_if_field(vals, "work_email", email)
         self._raet_set_if_field(vals, "private_email", email)
 
-        # Teléfonos
-        self._raet_apply_phones(vals, detail.get("phones") or [])
+        # Teléfonos: lista camelCase o campos planos (movil / telephone)
+        phones = detail.get("phones") or []
+        if phones:
+            self._raet_apply_phones(vals, phones)
+        else:
+            self._raet_apply_flat_phones(vals, detail)
 
         # Fechas laborales
-        vals["x_raet_hiring_date"] = _raet_parse_date(detail.get("hiringDate"))
-        vals["x_raet_entry_date"] = _raet_parse_date(detail.get("dateOfCountryEntry"))
+        vals["x_raet_hiring_date"] = _raet_parse_date(
+            _raet_pick(detail, "hiringDate", "hiring_date"))
+        vals["x_raet_entry_date"] = _raet_parse_date(
+            _raet_pick(detail, "dateOfCountryEntry", "entry_date"))
 
-        # Jefe directo (se resuelve luego)
-        vals["x_raet_reports_to_external"] = detail.get("reportsToExternalId") or False
+        # Jefe directo (se resuelve luego): externalId camelCase o DNI plano
+        vals["x_raet_reports_to_external"] = _raet_pick(
+            detail, "reportsToExternalId", "immediate_boss") or False
 
-        # --- Fases (baja) ---
+        # --- Fases (baja): sub-recurso o campos planos end_date/low_motive ---
         if phases:
             ph = phases[0]
             vals["x_raet_end_date"] = _raet_parse_date(ph.get("endDate"))
             vals["x_raet_low_motive"] = ph.get("decouplingCause") or False
+        else:
+            end_date = _raet_parse_date(_raet_pick(detail, "end_date"))
+            if end_date:
+                vals["x_raet_end_date"] = end_date
+            low_motive = _raet_pick(detail, "low_motive")
+            if low_motive:
+                vals["x_raet_low_motive"] = low_motive
 
-        # --- Estructuras ---
-        self._raet_apply_structures(vals, structures, company)
+        # --- Estructuras: sub-recurso o campos planos ---
+        if structures:
+            self._raet_apply_structures(vals, structures, company)
+        else:
+            self._raet_apply_flat_structures(vals, detail, company)
 
-        # --- Domicilio ---
-        self._raet_apply_address(vals, addresses)
+        # --- Domicilio: sub-recurso o campos planos ---
+        if addresses:
+            self._raet_apply_address(vals, addresses)
+        else:
+            self._raet_apply_flat_address(vals, detail)
 
         vals["x_raet_last_sync"] = fields.Datetime.now()
         return vals
@@ -380,15 +461,71 @@ class HrEmployee(models.Model):
         country_id = self._raet_find_country(addr.get("country"))
         self._raet_set_if_field(vals, "private_country_id", country_id)
 
+    # --------------------------------------------------------------------- #
+    # Variantes para el formato plano (snake_case) de RAET
+    # --------------------------------------------------------------------- #
+    def _raet_apply_flat_phones(self, vals, detail):
+        """Teléfonos desde campos planos: 'movil' y 'telephone'."""
+        movil = _raet_pick(detail, "movil")
+        if movil:
+            self._raet_set_if_field(vals, "mobile_phone", str(movil))
+            self._raet_set_if_field(vals, "private_phone", str(movil))
+        telephone = _raet_pick(detail, "telephone")
+        if telephone:
+            self._raet_set_if_field(vals, "work_phone", str(telephone))
+            if not movil:
+                self._raet_set_if_field(vals, "private_phone", str(telephone))
+
+    def _raet_apply_flat_structures(self, vals, detail, company):
+        """Estructura organizativa desde campos planos del empleado."""
+        imput = _raet_pick(detail, "imput_center")
+        if imput:
+            vals["x_raet_imput_center"] = imput
+        cost_center = _raet_pick(detail, "id_center_cost")
+        if cost_center:
+            vals["x_raet_cost_center"] = cost_center
+        contract = _raet_pick(detail, "contract_type")
+        if contract:
+            vals["x_raet_contract_type"] = contract
+        working_day = _raet_pick(detail, "working_day")
+        if working_day:
+            vals["x_raet_working_day"] = working_day
+        position = _raet_pick(detail, "cod_position")
+        if position:
+            vals["x_raet_position_code"] = position
+            self._raet_set_if_field(vals, "job_title", position)
+            self._raet_set_if_field(
+                vals, "job_id", self._raet_get_job(position, company))
+        department = _raet_pick(detail, "cod_deparment", "cod_department")
+        if department:
+            vals["x_raet_department_code"] = department
+            self._raet_set_if_field(
+                vals, "department_id",
+                self._raet_get_department(department, company))
+
+    def _raet_apply_flat_address(self, vals, detail):
+        """Domicilio desde campos planos: 'address', 'postal_code', etc."""
+        street = _raet_pick(detail, "address")
+        self._raet_set_if_field(vals, "private_street", street and str(street))
+        self._raet_set_if_field(vals, "private_zip",
+                                _raet_pick(detail, "postal_code"))
+        reference = _raet_pick(detail, "address_reference")
+        if reference:
+            vals["x_raet_address_reference"] = reference
+        country = _raet_pick(detail, "id_code_country", "nationality")
+        country_id = self._raet_find_country(country)
+        self._raet_set_if_field(vals, "private_country_id", country_id)
+
     # ===================================================================== #
     # Upsert
     # ===================================================================== #
     @api.model
     def _raet_find_existing(self, vals, company):
-        """Busca el empleado existente por id interno o por legajo/codbar."""
+        """Busca el empleado existente por id interno, legajo/codbar o DNI."""
         Employee = self.with_context(active_test=False)
         internal = vals.get("x_raet_internal_id")
         external = vals.get("x_raet_external_id")
+        identification = vals.get("identification_id")
         emp = self.browse()
         if internal:
             emp = Employee.search([
@@ -398,6 +535,11 @@ class HrEmployee(models.Model):
             emp = Employee.search([
                 "|", ("x_raet_external_id", "=", external),
                 ("barcode", "=", external),
+                ("company_id", "=", company.id)], limit=1)
+        # Match por DNI (identificacion) cuando no hay id interno/legajo previo.
+        if not emp and identification and "identification_id" in self._fields:
+            emp = Employee.search([
+                ("identification_id", "=", identification),
                 ("company_id", "=", company.id)], limit=1)
         return emp
 
@@ -413,6 +555,32 @@ class HrEmployee(models.Model):
     # ===================================================================== #
     # Sincronización por empresa
     # ===================================================================== #
+    def _raet_log_line(self, log, raet_id, payload, exc=None, state="error",
+                       external_id=None, name=None):
+        """Crea (y commitea) una línea de detalle del log para un empleado.
+
+        Se confirma de inmediato para que el error quede registrado y visible
+        aunque el proceso se interrumpa después. ``payload`` es la respuesta
+        cruda de RAET (dict) que se serializa a JSON para diagnóstico.
+        """
+        raw = False
+        if payload is not None:
+            try:
+                raw = json.dumps(payload, ensure_ascii=False, indent=2,
+                                 default=str)[:50000]
+            except (TypeError, ValueError):
+                raw = str(payload)[:50000]
+        self.env["raet.sync.log.line"].sudo().create({
+            "log_id": log.id,
+            "raet_id": raet_id and str(raet_id) or False,
+            "external_id": external_id and str(external_id) or False,
+            "name": name or False,
+            "state": state,
+            "message": exc is not None and str(exc) or False,
+            "payload": raw,
+        })
+        self.env.cr.commit()
+
     def _raet_sync_company(self, company, client=None, updated_from=None, log=None):
         """Sincroniza el padrón de una empresa (tenant). Devuelve el log.
 
@@ -455,9 +623,16 @@ class HrEmployee(models.Model):
                 if raet_id is None:
                     continue
                 total += 1
+                detail = None
                 try:
                     detail = client.get_employee(tenant, raet_id)
                     if not detail:
+                        error_lines.append("rh-%s: sin detalle (respuesta vacía)" % raet_id)
+                        self._raet_log_line(
+                            log, raet_id, summary,
+                            exc="El detalle del empleado vino vacío.",
+                            name=(summary or {}).get("name"))
+                        errors += 1
                         continue
                     phases = client.get_employee_phases(tenant, raet_id)
                     structures = client.get_employee_structures(tenant, raet_id)
@@ -477,6 +652,12 @@ class HrEmployee(models.Model):
                     error_lines.append("rh-%s: %s" % (raet_id, exc))
                     _logger.exception("RAET: error procesando empleado %s (tenant %s)",
                                       raet_id, tenant)
+                    # Registrar el error como línea del log, con el JSON recibido
+                    # (detalle si se obtuvo, o el resumen) para diagnóstico/mapeo.
+                    payload = detail if detail else summary
+                    self._raet_log_line(
+                        log, raet_id, payload, exc=exc,
+                        name=(payload or {}).get("name"))
                 # Progreso periódico: persistir contadores parciales y dejar
                 # rastro en el log del servidor para padrones grandes.
                 if total % 25 == 0:
@@ -514,6 +695,9 @@ class HrEmployee(models.Model):
                 "message": msg,
             })
             self.env.cr.commit()
+            # Registrar también el fallo global como línea para que sea visible
+            # junto al resto del detalle.
+            self._raet_log_line(log, False, None, exc=msg, name=_("Error general"))
             # No se relanza: el error queda registrado y visible en el log para
             # que el usuario pueda diagnosticarlo, y la corrida no aborta el
             # resto de empresas.
@@ -534,17 +718,21 @@ class HrEmployee(models.Model):
         return log
 
     def _raet_resolve_managers(self, company):
-        """Asigna parent_id buscando el jefe por externalId/codbar."""
+        """Asigna parent_id buscando el jefe por externalId/codbar o DNI."""
         Employee = self.with_context(active_test=False).sudo()
         pending = Employee.search([
             ("company_id", "=", company.id),
             ("x_raet_reports_to_external", "!=", False)])
+        has_identification = "identification_id" in self._fields
         for emp in pending:
             boss_ext = emp.x_raet_reports_to_external
-            boss = Employee.search([
-                "|", ("x_raet_external_id", "=", boss_ext),
-                ("barcode", "=", boss_ext),
-                ("company_id", "=", company.id)], limit=1)
+            domain = ["|", ("x_raet_external_id", "=", boss_ext),
+                      ("barcode", "=", boss_ext)]
+            # En el formato plano, immediate_boss es el DNI del jefe.
+            if has_identification:
+                domain = ["|"] + domain + [("identification_id", "=", boss_ext)]
+            domain += [("company_id", "=", company.id)]
+            boss = Employee.search(domain, limit=1)
             if boss and boss.id != emp.id and emp.parent_id.id != boss.id:
                 emp.parent_id = boss.id
 

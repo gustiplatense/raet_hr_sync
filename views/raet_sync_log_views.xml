@@ -50,6 +50,37 @@
                     <group string="Detalle">
                         <field name="message" nolabel="1"/>
                     </group>
+                    <notebook>
+                        <page string="Errores / detalle por empleado" name="lines">
+                            <field name="line_ids" readonly="1">
+                                <list string="Detalle por empleado"
+                                      decoration-danger="state == 'error'"
+                                      decoration-success="state == 'ok'">
+                                    <field name="raet_id"/>
+                                    <field name="external_id"/>
+                                    <field name="name"/>
+                                    <field name="message"/>
+                                    <field name="state" widget="badge"
+                                           decoration-danger="state == 'error'"
+                                           decoration-success="state == 'ok'"/>
+                                </list>
+                                <form string="Detalle de empleado">
+                                    <group>
+                                        <field name="raet_id"/>
+                                        <field name="external_id"/>
+                                        <field name="name"/>
+                                        <field name="state"/>
+                                    </group>
+                                    <group string="Mensaje de error">
+                                        <field name="message" nolabel="1"/>
+                                    </group>
+                                    <group string="JSON recibido de RAET">
+                                        <field name="payload" nolabel="1"/>
+                                    </group>
+                                </form>
+                            </field>
+                        </page>
+                    </notebook>
                 </sheet>
             </form>
         </field>

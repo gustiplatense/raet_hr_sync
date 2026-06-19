@@ -217,17 +217,32 @@ class RaetClient(object):
         url = "%s/employees/rh-%s" % (self.api_url, raet_id)
         return self._get(url, tenant)
 
-    def get_employee_phases(self, tenant, raet_id):
-        url = "%s/employees/rh-%s/phases" % (self.api_url, raet_id)
-        data = self._get(url, tenant) or {}
+    def _get_subresource(self, tenant, raet_id, name):
+        """Devuelve los ``values`` de un sub-recurso del empleado.
+
+        Tolerante a fallos: si el endpoint no existe o devuelve error (algunas
+        instalaciones de RAET entregan todos los datos en el objeto plano del
+        empleado y no exponen estos sub-recursos), se registra un aviso y se
+        devuelve una lista vacía en lugar de abortar el procesamiento del
+        empleado completo.
+        """
+        url = "%s/employees/rh-%s/%s" % (self.api_url, raet_id, name)
+        try:
+            data = self._get(url, tenant) or {}
+        except RaetApiError as exc:
+            _logger.warning(
+                "RAET: sub-recurso '%s' no disponible para rh-%s (tenant %s): %s",
+                name, raet_id, tenant, exc)
+            return []
+        if isinstance(data, list):
+            return data
         return data.get("values") or []
+
+    def get_employee_phases(self, tenant, raet_id):
+        return self._get_subresource(tenant, raet_id, "phases")
 
     def get_employee_structures(self, tenant, raet_id):
-        url = "%s/employees/rh-%s/structures" % (self.api_url, raet_id)
-        data = self._get(url, tenant) or {}
-        return data.get("values") or []
+        return self._get_subresource(tenant, raet_id, "structures")
 
     def get_employee_addresses(self, tenant, raet_id):
-        url = "%s/employees/rh-%s/addresses" % (self.api_url, raet_id)
-        data = self._get(url, tenant) or {}
-        return data.get("values") or []
+        return self._get_subresource(tenant, raet_id, "addresses")

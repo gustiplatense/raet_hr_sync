@@ -1,4 +1,6 @@
 id,name,model_id:id,group_id:id,perm_read,perm_write,perm_create,perm_unlink
 access_raet_sync_log_user,raet.sync.log.user,model_raet_sync_log,hr.group_hr_user,1,0,0,0
 access_raet_sync_log_manager,raet.sync.log.manager,model_raet_sync_log,hr.group_hr_manager,1,1,1,1
+access_raet_sync_log_line_user,raet.sync.log.line.user,model_raet_sync_log_line,hr.group_hr_user,1,0,0,0
+access_raet_sync_log_line_manager,raet.sync.log.line.manager,model_raet_sync_log_line,hr.group_hr_manager,1,1,1,1
 access_raet_sync_wizard_manager,raet.sync.wizard.manager,model_raet_sync_wizard,hr.group_hr_manager,1,1,1,1
