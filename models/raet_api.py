@@ -67,6 +67,9 @@ class RaetClient(object):
         self.page_size = page_size or DEFAULT_PAGE_SIZE
         self.timeout = timeout or DEFAULT_TIMEOUT
         self._token = None
+        # Último totalCount declarado por la API en el listado de empleados
+        # (sirve para detectar lecturas truncadas).
+        self.last_total_count = 0
 
     # ------------------------------------------------------------------ #
     # Autenticación
@@ -174,6 +177,9 @@ class RaetClient(object):
         url = "%s/employees" % self.api_url
         page = 1
         emitted = 0
+        total = 0
+        seen_ids = set()
+        self.last_total_count = 0
         _logger.info("RAET: listando empleados tenant=%s updatedFrom=%s pageSize=%s",
                      tenant, updated_from or "(todo)", self.page_size)
         while page <= MAX_PAGES:
@@ -185,22 +191,41 @@ class RaetClient(object):
             # se contempla también una lista directa por robustez.
             if isinstance(data, list):
                 values = data
-                total = len(data)
+                page_total = 0
             else:
                 data = data or {}
                 values = data.get("values") or []
-                total = data.get("totalCount") or 0
-            _logger.info("RAET: página %s -> %s registros (totalCount=%s, acumulado=%s)",
-                         page, len(values), total, emitted + len(values))
+                page_total = data.get("totalCount") or 0
+            if page_total:
+                total = page_total
+                self.last_total_count = page_total
             if page == 1 and not values:
                 _logger.warning(
                     "RAET: la primera página no trajo empleados. Respuesta=%.500s",
                     data)
+            # Emitir sólo los registros no vistos: si la API ignora el parámetro
+            # 'page' y repite resultados, evitamos duplicar y bucles infinitos.
+            new_in_page = 0
             for emp in values:
+                emp_id = emp.get("id") if isinstance(emp, dict) else None
+                if emp_id is not None:
+                    if emp_id in seen_ids:
+                        continue
+                    seen_ids.add(emp_id)
+                new_in_page += 1
                 emitted += 1
                 yield emp
-            # Condiciones de parada: página no llena, o ya emitimos el total.
-            if len(values) < self.page_size:
+            _logger.info(
+                "RAET: página %s -> %s registros (%s nuevos, totalCount=%s, "
+                "acumulado=%s)", page, len(values), new_in_page, total, emitted)
+            # Condiciones de parada:
+            #  1) la página vino vacía (fin real del padrón), o
+            #  2) no aportó registros nuevos (la API ignora 'page' y repite), o
+            #  3) ya emitimos todos los que la API declara en totalCount.
+            # NO se corta por "página más chica que pageSize": muchas APIs
+            # aplican un máximo de página menor al solicitado y eso truncaba la
+            # lectura (se quedaba con la primera página).
+            if not values or new_in_page == 0:
                 break
             if total and emitted >= total:
                 break

@@ -684,6 +684,16 @@ class HrEmployee(models.Model):
             # Resolver jefes directos una vez creados todos los empleados.
             self._raet_resolve_managers(company)
             company.sudo().write({"raet_last_sync": fields.Datetime.now()})
+            # Aviso si la API declaró más empleados de los que se procesaron:
+            # ayuda a detectar lecturas truncadas o filtros incrementales.
+            api_total = getattr(client, "last_total_count", 0) or 0
+            if api_total and total < api_total:
+                warn = _(
+                    "Atención: RAET declaró %s empleados (totalCount) pero sólo "
+                    "se procesaron %s. Si esperabas el padrón completo, usá el "
+                    "modo 'Completo' en el asistente.") % (api_total, total)
+                _logger.warning("RAET: %s (tenant=%s)", warn, tenant)
+                error_lines.append(warn)
         except Exception as exc:  # noqa: BLE001
             # Cualquier fallo no controlado a nivel de la corrida (error de API,
             # red, timeout parcial, paginación, resolución de jefes, etc.) queda
@@ -730,23 +740,37 @@ class HrEmployee(models.Model):
         return log
 
     def _raet_resolve_managers(self, company):
-        """Asigna parent_id buscando el jefe por externalId RAET o DNI."""
+        """Asigna parent_id buscando el jefe por Nº de identificación o externalId.
+
+        ``reportsToExternalId`` puede traer el DNI del jefe o su externalId, así
+        que se busca primero por Número de Identificación (criterio principal) y,
+        si no hay coincidencia, por externalId RAET.
+        """
         Employee = self.with_context(active_test=False).sudo()
         pending = Employee.search([
             ("company_id", "=", company.id),
             ("x_raet_reports_to_external", "!=", False)])
         has_identification = "identification_id" in self._fields
+        resolved = 0
         for emp in pending:
-            boss_ext = emp.x_raet_reports_to_external
-            domain = [("x_raet_external_id", "=", boss_ext)]
-            # reportsToExternalId puede ser el externalId o, en algunos casos,
-            # el DNI del jefe; se buscan ambos.
+            boss_ref = emp.x_raet_reports_to_external
+            boss = Employee.browse()
+            # 1) Coincidencia por Número de Identificación (DNI) del jefe.
             if has_identification:
-                domain = ["|"] + domain + [("identification_id", "=", boss_ext)]
-            domain += [("company_id", "=", company.id)]
-            boss = Employee.search(domain, limit=1)
+                boss = Employee.search([
+                    ("identification_id", "=", boss_ref),
+                    ("company_id", "=", company.id)], limit=1)
+            # 2) Respaldo: coincidencia por externalId RAET del jefe.
+            if not boss:
+                boss = Employee.search([
+                    ("x_raet_external_id", "=", boss_ref),
+                    ("company_id", "=", company.id)], limit=1)
             if boss and boss.id != emp.id and emp.parent_id.id != boss.id:
                 emp.parent_id = boss.id
+                resolved += 1
+        _logger.info(
+            "RAET: jefes resueltos para empresa=%s -> %s de %s con jefe declarado",
+            company.name, resolved, len(pending))
 
     # ===================================================================== #
     # Entradas: cron y acción manual
