@@ -26,6 +26,7 @@ MARITAL_MAP = {
     "soltero": "single", "soltera": "single", "single": "single",
     "casado": "married", "casada": "married", "married": "married",
     "divorciado": "divorced", "divorciada": "divorced", "divorced": "divorced",
+    "separado": "divorced", "separada": "divorced", "separated": "divorced",
     "viudo": "widower", "viuda": "widower", "widow": "widower",
     "union": "cohabitant", "unión": "cohabitant", "concubinato": "cohabitant",
     "conviviente": "cohabitant", "cohabitant": "cohabitant",
@@ -247,8 +248,14 @@ class HrEmployee(models.Model):
         return job.id
 
     def _raet_set_if_field(self, vals, field, value):
-        """Asigna value a vals[field] sólo si el campo existe en el modelo."""
-        if value not in (None, "") and field in self._fields:
+        """Asigna value a vals[field] sólo si el campo existe y el valor no es vacío.
+
+        Se ignora también ``False`` deliberadamente: campos selection como
+        'marital' son NOT NULL en Odoo 19, y escribir False (NULL) rompe la
+        inserción. Si RAET no trae el dato, se deja que Odoo aplique su valor
+        por defecto en lugar de forzar un NULL.
+        """
+        if value not in (None, "", False) and field in self._fields:
             vals[field] = value
 
     # ===================================================================== #
@@ -278,9 +285,9 @@ class HrEmployee(models.Model):
         vals["x_raet_external_id"] = external_id and str(external_id) or False
         vals["x_raet_internal_id"] = internal_id and str(internal_id) or False
         vals["x_raet_tenant"] = str(tenant)
-        # codbar / legajo -> campo nativo 'barcode'
-        self._raet_set_if_field(vals, "barcode",
-                                external_id and str(external_id) or False)
+        # Nota: NO se escribe 'barcode' (RFID). Ese campo es el legajo interno
+        # de Odoo y no proviene de RAET; debe quedar en blanco / gestionarse
+        # manualmente. El externalId de RAET se conserva en x_raet_external_id.
         vals["company_id"] = company.id
         if "sw_active" in detail:
             vals["active"] = _raet_to_bool(detail.get("sw_active"), default=True)
@@ -353,7 +360,8 @@ class HrEmployee(models.Model):
         vals["x_raet_handicapped"] = handicapped
         htype = detail.get("handicapType") or {}
         vals["x_raet_handicap_type"] = htype.get("description") or False
-        self._raet_set_if_field(vals, "disabled", handicapped)
+        if "disabled" in self._fields:
+            vals["disabled"] = handicapped
 
         # Email
         email = _raet_pick(detail, "email")
@@ -521,7 +529,7 @@ class HrEmployee(models.Model):
     # ===================================================================== #
     @api.model
     def _raet_find_existing(self, vals, company):
-        """Busca el empleado existente por id interno, legajo/codbar o DNI."""
+        """Busca el empleado existente por id interno RAET, externalId o DNI."""
         Employee = self.with_context(active_test=False)
         internal = vals.get("x_raet_internal_id")
         external = vals.get("x_raet_external_id")
@@ -533,10 +541,9 @@ class HrEmployee(models.Model):
                 ("company_id", "=", company.id)], limit=1)
         if not emp and external:
             emp = Employee.search([
-                "|", ("x_raet_external_id", "=", external),
-                ("barcode", "=", external),
+                ("x_raet_external_id", "=", external),
                 ("company_id", "=", company.id)], limit=1)
-        # Match por DNI (identificacion) cuando no hay id interno/legajo previo.
+        # Match por DNI (identificacion) cuando no hay id interno/externalId previo.
         if not emp and identification and "identification_id" in self._fields:
             emp = Employee.search([
                 ("identification_id", "=", identification),
@@ -648,6 +655,10 @@ class HrEmployee(models.Model):
                     self.env.cr.commit()
                 except Exception as exc:  # noqa: BLE001
                     self.env.cr.rollback()
+                    # Tras el rollback, la caché del ORM puede quedar con datos
+                    # de la transacción abortada; se invalida para que el resto
+                    # de empleados se procese desde cero y el fallo no se propague.
+                    self.env.invalidate_all()
                     errors += 1
                     error_lines.append("rh-%s: %s" % (raet_id, exc))
                     _logger.exception("RAET: error procesando empleado %s (tenant %s)",
@@ -682,6 +693,7 @@ class HrEmployee(models.Model):
             _logger.exception(
                 "RAET: sincronización abortada para empresa=%s tenant=%s",
                 company.name, tenant)
+            self.env.invalidate_all()
             is_api = isinstance(exc, RaetApiError)
             msg = (_("Error de API RAET: %s") if is_api
                    else _("Sincronización interrumpida: %s")) % exc
@@ -718,7 +730,7 @@ class HrEmployee(models.Model):
         return log
 
     def _raet_resolve_managers(self, company):
-        """Asigna parent_id buscando el jefe por externalId/codbar o DNI."""
+        """Asigna parent_id buscando el jefe por externalId RAET o DNI."""
         Employee = self.with_context(active_test=False).sudo()
         pending = Employee.search([
             ("company_id", "=", company.id),
@@ -726,9 +738,9 @@ class HrEmployee(models.Model):
         has_identification = "identification_id" in self._fields
         for emp in pending:
             boss_ext = emp.x_raet_reports_to_external
-            domain = ["|", ("x_raet_external_id", "=", boss_ext),
-                      ("barcode", "=", boss_ext)]
-            # En el formato plano, immediate_boss es el DNI del jefe.
+            domain = [("x_raet_external_id", "=", boss_ext)]
+            # reportsToExternalId puede ser el externalId o, en algunos casos,
+            # el DNI del jefe; se buscan ambos.
             if has_identification:
                 domain = ["|"] + domain + [("identification_id", "=", boss_ext)]
             domain += [("company_id", "=", company.id)]
