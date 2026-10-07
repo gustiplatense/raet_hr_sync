@@ -554,6 +554,9 @@ class HrEmployee(models.Model):
     def _raet_upsert(self, vals, company):
         emp = self._raet_find_existing(vals, company)
         if emp:
+            # No sobreescribir el puesto si ya existe en el empleado
+            if "job_id" in vals and emp.job_id:
+                vals.pop("job_id")
             emp.write(vals)
             return emp, False
         emp = self.create(vals)
