@@ -21,7 +21,7 @@
               groups="hr.group_hr_user"/>
 
     <menuitem id="menu_raet_settings"
-              name="Configuración RAET"
+              name="Configuración"
               parent="menu_raet_root"
               action="action_raet_config_settings"
               sequence="30"
